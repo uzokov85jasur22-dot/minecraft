@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Minecraft JS Full</title>
+<style>
+body { margin:0; overflow:hidden; background:black; }
+
+/* CROSSHAIR */
+#crosshair{
+  position:fixed;
+  top:50%; left:50%;
+  width:18px; height:18px;
+  transform:translate(-50%,-50%);
+  pointer-events:none;
+}
+#crosshair::before,#crosshair::after{
+  content:""; position:absolute; background:white;
+}
+#crosshair::before{ width:2px;height:18px;left:8px; }
+#crosshair::after{ height:2px;width:18px;top:8px; }
+
+/* HOTBAR */
+#hotbar{
+  position:fixed;
+  bottom:20px;
+  left:50%;
+  transform:translateX(-50%);
+  display:flex; gap:10px;
+}
+.slot{
+  width:45px;height:45px;
+  border:3px solid #555;
+  cursor:pointer;
+  position:relative;
+  font-family:sans-serif;
+  font-size:14px;
+  color:white;
+  display:flex;
+  justify-content:center;
+  align-items:flex-end;
+}
+.active{ border-color:yellow; }
+</style>
+</head>
+<body>
+
+<div id="crosshair"></div>
+<div id="hotbar"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+<script>
+
+/* === SCENE & PLAYER === */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+
+const camera = new THREE.PerspectiveCamera(75,innerWidth/innerHeight,0.1,1000);
+const player = new THREE.Object3D();
+player.position.set(0,3,5);
+scene.add(player);
+player.add(camera);
+camera.position.set(0,0,0);
+
+const renderer = new THREE.WebGLRenderer();
+renderer.setSize(innerWidth,innerHeight);
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0xffffff,0.4));
+const sun = new THREE.DirectionalLight(0xffffff,1);
+sun.position.set(10,20,10);
+scene.add(sun);
+
+/* === BLOCKS === */
+const blocks=[];
+function addBlock(x,y,z,color){
+  const g = new THREE.BoxGeometry(1,1,1);
+  const m = new THREE.MeshStandardMaterial({color});
+  const b = new THREE.Mesh(g,m);
+  b.position.set(x,y,z);
+  scene.add(b);
+  blocks.push(b);
+  return b;
+}
+
+/* === GROUND 5 QAVAT === */
+const groundColors = [0xaaaaaa,0x888888,0x555555,0x444444,0x333333];
+for(let layer=0; layer<5; layer++)
+  for(let x=-20;x<20;x++)
+    for(let z=-20;z<20;z++)
+      addBlock(x,-1-layer,z,groundColors[layer]);
+
+/* === TREE === */
+function tree(x,z){
+  addBlock(x,0,z,0x8b4513);
+  addBlock(x,1,z,0x8b4513);
+  for(let dx=-1;dx<=1;dx++)
+  for(let dz=-1;dz<=1;dz++)
+    addBlock(x+dx,2,z+dz,0x006400);
+}
+tree(3,3); tree(-5,-4);
+
+/* === HOTBAR DATA === */
+const inventoryData = [
+  {color:0x00aa00, count:10},
+  {color:0x8b4513, count:10},
+  {color:0x888888, count:10},
+  {color:0xffff00, count:10},
+  {color:0xff0000, count:10}
+];
+let currentIndex = 0;
+
+const hotbarDiv = document.getElementById("hotbar");
+
+function renderHotbar(){
+  hotbarDiv.innerHTML="";
+  inventoryData.forEach((item,index)=>{
+    const div = document.createElement("div");
+    div.className="slot"+(index===currentIndex?" active":"");
+    div.style.background="#"+item.color.toString(16).padStart(6,'0');
+    div.textContent=item.count;
+    div.onclick=()=>{ currentIndex=index; renderHotbar(); };
+    hotbarDiv.appendChild(div);
+  });
+}
+renderHotbar();
+
+/* === INPUT === */
+const keys = {};
+onkeydown = e => keys[e.key.toLowerCase()] = true;
+onkeyup   = e => keys[e.key.toLowerCase()] = false;
+
+/* HOTBAR RAQAMLAR BILAN TANLASH */
+document.addEventListener("keydown", e=>{
+  const num = parseInt(e.key);
+  if(num>=1 && num<=inventoryData.length){
+    currentIndex = num-1;
+    renderHotbar();
+  }
+});
+
+/* === MOUSE LOOK === */
+let yaw=0,pitch=0;
+document.body.onclick=()=>document.body.requestPointerLock();
+document.addEventListener("mousemove", e=>{
+  if(document.pointerLockElement){
+    yaw   -= e.movementX * 0.002;
+    pitch -= e.movementY * 0.002;
+    pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitch));
+    player.rotation.y = yaw;
+    camera.rotation.x = pitch;
+  }
+});
+
+/* === RAYCAST BLOCK PLACE & BREAK === */
+const ray = new THREE.Raycaster();
+const mouse = {x:0,y:0};
+
+let breakingBlock = null;
+let breakStartTime = 0;
+const breakDuration = 1000; // 1 soniya
+
+document.addEventListener("mousedown", e=>{
+  ray.setFromCamera(mouse,camera);
+  const hit = ray.intersectObjects(blocks);
+
+  if(e.button===0){ // left click → break
+    if(hit.length){
+      breakingBlock = hit[0].object;
+      breakStartTime = performance.now();
+    }
+  } else if(e.button===2){ // right click → place
+    if(inventoryData[currentIndex].count>0){
+      let placePos;
+      if(hit.length){
+        // hit bo‘lsa oldingi blok yoniga
+        const b = hit[0].object;
+        const n = hit[0].face.normal;
+        placePos = {x:b.position.x+n.x, y:b.position.y+n.y, z:b.position.z+n.z};
+      } else {
+        // hit bo‘lmasa, crosshair oldida 3 birlik oldinga
+        const dir = new THREE.Vector3();
+        camera.getWorldDirection(dir);
+        placePos = {
+          x: Math.round(player.position.x + dir.x*3),
+          y: Math.round(player.position.y + dir.y*3),
+          z: Math.round(player.position.z + dir.z*3)
+        };
+      }
+      addBlock(placePos.x, placePos.y, placePos.z, inventoryData[currentIndex].color);
+      inventoryData[currentIndex].count--;
+      renderHotbar();
+    }
+  }
+});
+
+document.addEventListener("mouseup", e=>{
+  if(e.button===0) breakingBlock=null;
+});
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+/* === PHYSICS === */
+let velY=0;
+const gravity=0.02;
+let onGround=false;
+
+function collide(x,y,z){
+  for(const b of blocks){
+    if(Math.abs(b.position.x-x)<0.5 &&
+       Math.abs(b.position.y-y)<1.5 &&
+       Math.abs(b.position.z-z)<0.5) return true;
+  }
+  return false;
+}
+
+/* === MOVE === */
+function move(){
+  const speed=0.1;
+  let nx=player.position.x;
+  let nz=player.position.z;
+
+  if(keys.w){ nx -= Math.sin(yaw)*speed; nz -= Math.cos(yaw)*speed; }
+  if(keys.s){ nx += Math.sin(yaw)*speed; nz += Math.cos(yaw)*speed; }
+  if(keys.a){ nx -= Math.cos(yaw)*speed; nz += Math.sin(yaw)*speed; }
+  if(keys.d){ nx += Math.cos(yaw)*speed; nz -= Math.sin(yaw)*speed; }
+
+  if(!collide(nx, player.position.y, nz)){
+    player.position.x=nx;
+    player.position.z=nz;
+  }
+
+  velY-=gravity;
+  let ny=player.position.y + velY;
+  if(collide(player.position.x, ny, player.position.z)){
+    velY=0; onGround=true;
+  } else {
+    player.position.y=ny; onGround=false;
+  }
+  if(keys[" "] && onGround) velY=0.35;
+
+  // break block
+  if(breakingBlock){
+    const now = performance.now();
+    if(now-breakStartTime>=breakDuration){
+      scene.remove(breakingBlock);
+      blocks.splice(blocks.indexOf(breakingBlock),1);
+      breakingBlock=null;
+    }
+  }
+}
+
+/* === LOOP === */
+function animate(){
+  requestAnimationFrame(animate);
+  move();
+  renderer.render(scene,camera);
+}
+animate();
+
+</script>
+</body>
+</html>
